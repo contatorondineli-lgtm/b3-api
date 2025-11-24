@@ -1,48 +1,66 @@
 const express = require("express");
 const axios = require("axios");
+const cheerio = require("cheerio");
 const cors = require("cors");
 
 const app = express();
 app.use(cors());
 
-// Endpoint principal: /quote?ticker=BBAS3
-app.get("/quote", async (req, res) => {
-  const ticker = req.query.ticker;
+// Função que consulta dados da página da ADVFN
+async function consultarOpcaoADVFN(ticker) {
+    const url = `https://br.advfn.com/bolsa-de-valores/bovespa/${ticker}/opcoes`;
 
-  if (!ticker) {
-    return res.status(400).json({ error: "Você deve enviar ?ticker=BBAS3" });
-  }
+    try {
+        const { data: html } = await axios.get(url, {
+            headers: {
+                "User-Agent": "Mozilla/5.0"
+            }
+        });
 
-  try {
-    const url = `https://statusinvest.com.br/category/indicatorhistoricallist?codes=${ticker}&time=1&categoryType=2`;
+        const $ = cheerio.load(html);
 
-    const response = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-    });
+        // A ADVFN usa tabelas, aqui extraímos as principais informações:
+        const preco = $('td[title="Último Preço"]').first().text().trim() ||
+                      $('td[data-col="Último"]').first().text().trim();
 
-    res.json({
-      ticker: ticker,
-      price: response.data?.data[0]?.value ?? null,
-      raw: response.data,
-    });
-  } catch (err) {
-    res.status(500).json({
-      error: "Erro ao buscar dados no StatusInvest",
-      detail: err.message,
-    });
-  }
+        const variacao = $('td[title="Variação"]').first().text().trim() ||
+                         $('td[data-col="Var%"]').first().text().trim();
+
+        const strike = $('td[title="Strike"]').first().text().trim();
+
+        const vencimento = $('td[title="Vencimento"]').first().text().trim();
+
+        // Tipo CALL/PUT baseado na letra
+        const tipo = ticker.includes("A") ? "CALL" : "PUT";
+
+        return {
+            ticker,
+            preco: preco || null,
+            variacao: variacao || null,
+            strike: strike || null,
+            tipo,
+            vencimento: vencimento || null
+        };
+
+    } catch (err) {
+        return { erro: "Falha ao consultar ADVFN", detalhes: err.message };
+    }
+}
+
+// Endpoint: /opcao?ticker=BOVAJ140W4
+app.get("/opcao", async (req, res) => {
+    const ticker = req.query.ticker;
+
+    if (!ticker) {
+        return res.status(400).json({ erro: "Você deve enviar ?ticker=BOVAXXXX" });
+    }
+
+    const dados = await consultarOpcaoADVFN(ticker.toUpperCase());
+    res.json(dados);
 });
 
-app.get("/", (req, res) => {
-  res.json({
-    status: "API da B3 rodando",
-    exemplo: "/quote?ticker=PETR4",
-  });
-});
-
+// Inicia servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
-
+app.listen(PORT, () => {
+    console.log("API rodando na porta " + PORT);
+});
